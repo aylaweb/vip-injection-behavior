@@ -1,0 +1,196 @@
+<!--
+Copyright (c) 2016 The Ayla Project Authors.
+This code may only be used under the MIT style license found at http://aylaweb.github.io/LICENSE.txt
+The complete set of authors may be found at http://aylaweb.github.io/AUTHORS.txt
+The complete set of contributors may be found at http://aylaweb.github.io/CONTRIBUTORS.txt
+-->
+
+<link rel="import" href="../polymer/polymer.html">
+
+<script>
+    Ayla = window.Ayla || {};
+    Ayla.VipInjectionBehavior = {
+        properties: {
+            injections: {
+                type: Array,
+                value: function () {
+                    return [];
+                },
+                observer: '_injectionsInitChanged'
+            },
+            cursors: {
+                type: Array,
+                value: function () {
+                    return [];
+                }
+            }
+        },
+        observers: ['_injectionsChanged(injections.splices)'],
+        created: function () {
+            console.log(this.id + " -> " + this.localName + " -> vip-injection -> Event created");
+        },
+        processInjection: function (injectionConfig) {
+            //   injectionConfig.selector = (injectionConfig.selector) ? {$where: injectionConfig.selector} : {};
+            //   injectionConfig.modifier = injectionConfig.modifier || {};
+            if (!this.hasOwnProperty(injectionConfig.prop)) {
+                // this._addPropertyEffect(property, 'notify', {event: Polymer.CaseMap.camelToDashCase(property) + '-changed'});
+
+                this._addComplexObserverEffect('_' + injectionConfig.prop + 'Changed(' + injectionConfig.prop + '.*)');
+                Polymer.Bind._createAccessors(this, this[injectionConfig.prop], this._propertyEffects[this[injectionConfig.prop]]);
+                this['_' + injectionConfig.prop + 'Changed'] = function (changeRecord) {
+                };
+                this[injectionConfig.prop] = [];
+            }
+            if (injectionConfig.synch) {
+                this[injectionConfig.synchProp] = [];
+                this.anima = this.anima || {};
+                if (!this.hasOwnProperty(injectionConfig.synchProp)) {
+                    this._addComplexObserverEffect('_' + injectionConfig.synchProp + 'Changed(' + injectionConfig.synchProp + '.*)');
+                    Polymer.Bind._createAccessors(this, injectionConfig.synchProp, this._propertyEffects[injectionConfig.synchProp]);
+                    this['_' + injectionConfig.synchProp + 'Changed'] = function (changeRecord) {
+                    };
+                    this[injectionConfig.synchProp] = [];
+                }
+                id = Meteor.uuid().replace(/-/g, '');
+                var ruleUpdate = {};
+                ruleUpdate.when = injectionConfig.synch + ".currentTimeNotify";
+                ruleUpdate.then = "{this._updateSynchedData(" + injectionConfig.synch + ".currentTime, '" + injectionConfig.prop + "', '" + injectionConfig.synchProp + "');}";
+                this.rules = this.rules || [];
+                this.push('rules', ruleUpdate);
+
+                this['_entry'] =
+                        function (e) {
+                            var injectionElem = e[0];
+                            var index0 = _.findIndex(this[injectionConfig.prop], function (elem) {
+                                return (elem._id === injectionElem._id);
+                            });
+                            if (index0 >= 0) {
+                                var index1 = _.findIndex(this[injectionConfig.synchProp], function (elem) {
+                                    return (elem._id === injectionElem._id);
+                                });
+                                if (index1 === -1) {
+                                    var index = _.findIndex(this[injectionConfig.synchProp], function (elem) {
+                                        return (elem.tentry > injectionElem.tentry);
+                                    });
+                                    if (index === -1)
+                                        index = this[injectionConfig.synchProp] ? this[injectionConfig.synchProp].length : 0;
+                                    this.splice(injectionConfig.synchProp, index, 0, injectionElem);
+                                }
+                            }
+                        }.bind(this);
+                this['_exit'] =
+                        function (e) {
+                            var injectionElem = e[0];
+                            var index0 = _.findIndex(this[injectionConfig.prop], function (elem) {
+                                return (elem._id === injectionElem._id);
+                            });
+                            if (index0 >= 0) {
+                                var index = _.findIndex(this[injectionConfig.synchProp], function (elem) {
+                                    return elem._id === injectionElem._id;
+                                });
+                                if (index >= 0) {
+                                    this.splice(injectionConfig.synchProp, index, 1);
+                                }
+                            }
+                        }.bind(this);
+            }
+
+            var cursor = null;
+            //   var c = Tracker.autorun(function () {
+            //    if (cursorConfig.cursor)
+            //       cursorConfig.cursor.destroy();
+            //  this.splice(cursorConfig.prop, 0, 100);
+            var selector = (injectionConfig.selector) ? {$where: injectionConfig.selector} : {};
+            var modifier = injectionConfig.modifier || {};
+            cursor = Ayla[injectionConfig.collection].find(selector, modifier);
+
+            cursor.elem = this;
+            cursor.observe({
+                addedAt: function (doc, atIndex, before) {
+                    if (doc.synchProp) {
+                        doc.synchProp = injectionConfig.synchProp;
+                    }
+                    doc.prop = injectionConfig.prop;
+                    if (!this[injectionConfig.prop])
+                        this[injectionConfig.prop] = [];
+                    this.splice(injectionConfig.prop, atIndex, 0, doc);
+                    if (injectionConfig.synch) {
+                        (function (doc) {
+                            var animaEntry = {};
+                            animaEntry['atentry' + doc._id] = {at: doc.tentry,
+                                synch: injectionConfig.synch,
+                                then: "this._entry(x)",
+                                params: [doc]
+                            };
+                            this.set('anima', animaEntry);
+                            var animaExit = {};
+                            animaExit['atexit' + doc._id] = {at: doc.texit,
+                                synch: injectionConfig.synch,
+                                then: "this._exit(x)",
+                                params: [doc]
+                            };
+                            this.set('anima', animaExit);
+                        }.bind(this))(doc);
+                    }
+                }.bind(this),
+                removedAt: function (oldDocument, atIndex) {
+                    this.splice(injectionConfig.prop, atIndex, 1);
+                }.bind(this)
+            });
+            this.cursors.push(cursor);
+        },
+        _updateSynchedData: function (time, prop, synchedProp) {
+            this[prop].forEach(function (doc) {
+                if ((doc.tentry < time) && (doc.texit > time)) {
+                    var index1 = _.findIndex(this[synchedProp], function (elem) {
+                        return (elem === doc);
+                    });
+                    if (index1 === -1) {
+                        var index2 = _.findIndex(this[synchedProp], function (elem) {
+                            return (elem.tentry > doc.tentry);
+                        });
+                        if (index2 === -1) {
+                            index2 = this[synchedProp].length;
+                        }
+
+                        this.splice(synchedProp, index2, 0, doc);
+                    }
+                }
+            }, this);
+            var index = _.findIndex(this[synchedProp], function (elem) {
+                return (elem.tentry > time);
+            });
+            if (index >= 0)
+                this.splice(synchedProp, index, 100);
+        },
+        _injectionsInitChanged: function (val, old) {
+            if (val.length) {
+                val.forEach(function (injection) {
+                    this.processInjection(injection);
+                }, this)
+            }
+        },
+        _injectionsChanged: function (changeRecord) {
+            if (changeRecord) {
+                changeRecord.indexSplices.forEach(function (s) {
+                    var newInjections = s.object.slice(s.index, s.index + s.addedCount);
+                    newInjections.forEach(function (injection) {
+                        this.processInjection(injection);
+                    }, this);
+                }, this);
+            }
+        },
+        ready: function () {
+            console.log(this.id + " -> " + this.localName + " -> vip-injection -> Event ready");
+            //this.async(this.injectMyself.bind(this));
+        },
+        attached: function () {
+            console.log(this.id + " -> " + this.localName + " -> vip-injection -> Event attached");
+        },
+        detached: function () {
+            console.log(this.id + " -> " + this.localName + " -> vip-injection -> Event detached");
+        }
+
+
+    };
+</script>
